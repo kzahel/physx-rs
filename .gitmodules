@@ -1,4 +1,4 @@
 [submodule "physx-sys/physx"]
 	path = physx-sys/physx
-	url = https://github.com/EmbarkStudios/Physx-5
-	branch = main
+	url = git@github.com:kzahel/PhysX-5.git
+	branch = wasm32-unknown-emscripten-spike
