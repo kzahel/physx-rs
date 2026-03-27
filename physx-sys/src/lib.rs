@@ -187,6 +187,13 @@ include!("generated/unix/structgen.rs");
 ))]
 include!("generated/x86_64-pc-windows-msvc/structgen.rs");
 
+#[cfg(all(
+    not(feature = "structgen"),
+    target_os = "emscripten",
+    target_arch = "wasm32",
+))]
+include!("generated/wasm32-unknown-emscripten/structgen.rs");
+
 include!("physx_generated.rs");
 
 use std::ffi::c_void;

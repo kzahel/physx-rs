@@ -444,10 +444,11 @@ pub trait ArticulationReducedCoordinate:
 
     /// Set the collision layer on all links and shapes of this body
     fn set_collision_filter(&mut self, this_layer: CollisionLayers, other_layer: CollisionLayers) {
-        let (a, b) = (
-            (self as *const _ as usize >> 32) as u32,
-            self as *const _ as usize as u32,
-        );
+        let ptr = self as *const _ as usize;
+        #[cfg(target_pointer_width = "64")]
+        let (a, b) = ((ptr >> 32) as u32, ptr as u32);
+        #[cfg(target_pointer_width = "32")]
+        let (a, b) = (0, ptr as u32);
         for link in self.get_links_mut() {
             link.set_collision_filter(this_layer, other_layer, a, b);
         }

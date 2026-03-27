@@ -95,13 +95,19 @@ fn foundation(ctx: &mut Context) {
     ctx.add_component("foundation", None, &sources);
 
     let target_family = env::var("CARGO_CFG_TARGET_FAMILY").expect("TARGET_FAMILY not specified");
-    let sources = match target_family.as_str() {
-        "unix" => &include!("sources/foundation_unix"),
-        "windows" => &include!("sources/foundation_windows"),
-        other => panic!("unknown TARGET_FAMILY '{}'", other),
+    let target_families: Vec<_> = target_family.split(',').collect();
+    let has_family = |name: &str| target_families.contains(&name);
+    let (platform_sources, platform_dir) = if has_family("windows") {
+        (&include!("sources/foundation_windows")[..], "windows")
+    } else if has_family("unix") || has_family("wasm") {
+        // Spike only: reuse the unix platform file set so we can discover the
+        // next actual wasm build boundary instead of panicking immediately.
+        (&include!("sources/foundation_unix")[..], "unix")
+    } else {
+        panic!("unknown TARGET_FAMILY '{}'", target_family)
     };
 
-    ctx.add_sources(&format!("source/foundation/{target_family}"), sources);
+    ctx.add_sources(&format!("source/foundation/{platform_dir}"), platform_sources);
 }
 
 fn lowlevel(ctx: &mut Context) {
@@ -293,6 +299,17 @@ fn add_common(ctx: &mut Context) {
         builder.cpp_link_stdlib("c++");
     }
 
+    if ccenv.target_os == "emscripten" {
+        builder
+            .define("__EMSCRIPTEN__", None)
+            .define("PX_SUPPORT_PVD", "0")
+            // Spike only: prefer scalar fallback paths over x86/SSE-flavored
+            // wasm code until the target-specific vector configuration is
+            // understood.
+            .define("PX_SIMD_DISABLED", "1")
+            .cpp_link_stdlib(None);
+    }
+
     ctx.includes.push(shared_root.join("include"));
     ctx.includes.extend(
         [
@@ -322,7 +339,9 @@ fn add_common(ctx: &mut Context) {
         builder.define("PX_DEBUG", None).define("PX_CHECKED", None);
     }
 
-    builder.define("PX_SUPPORT_PVD", "1");
+    if ccenv.target_os != "emscripten" {
+        builder.define("PX_SUPPORT_PVD", "1");
+    }
 
     if cfg!(feature = "profile") {
         builder.define("PX_PROFILE", "1");
@@ -402,7 +421,8 @@ fn add_common(ctx: &mut Context) {
 }
 
 fn cc_compile(target_env: Environment) {
-    let root = env::current_dir().unwrap().join("physx/physx");
+    let cwd = env::current_dir().unwrap();
+    let root = cwd.join("physx/physx");
 
     let ccenv = target_env;
 
@@ -539,6 +559,7 @@ fn main() {
         // to remember to set CXX and CC to the respective toolchain compilers found in
         // the ANDROID_NDK_ROOT as well.
         let is_cross_compiling_aarch64 = target != host && target.starts_with("aarch64-");
+        let is_emscripten_target = target == "wasm32-unknown-emscripten";
 
         let structgen_compiler = physx_cc.get_compiler();
         let mut cmd = structgen_compiler.to_command();
@@ -567,6 +588,13 @@ fn main() {
             s.push(".obj");
             cmd.arg(s);
         } else {
+            if is_emscripten_target {
+                structgen_path.set_extension("js");
+                cmd.arg("-sENVIRONMENT=node");
+                cmd.arg("-sNODERAWFS=1");
+                cmd.arg("-sALLOW_MEMORY_GROWTH=1");
+                cmd.arg("-sSTACK_SIZE=8388608");
+            }
             if is_cross_compiling_aarch64 {
                 // statically linking is just much easier to deal
                 // with when using qemu-aarch64
@@ -587,7 +615,12 @@ fn main() {
         std::fs::metadata(&structgen_path)
             .expect("failed to compile structgen even though compiler reported no failures");
 
-        let mut structgen = if is_cross_compiling_aarch64 {
+        let mut structgen = if is_emscripten_target {
+            let node = env::var_os("NODE").unwrap_or_else(|| OsString::from("node"));
+            let mut structgen = std::process::Command::new(node);
+            structgen.arg(&structgen_path);
+            structgen
+        } else if is_cross_compiling_aarch64 {
             let mut structgen = std::process::Command::new("qemu-aarch64");
             structgen.arg(&structgen_path);
             structgen
@@ -607,6 +640,13 @@ fn main() {
 
         if target == "x86_64-pc-windows-msvc" {
             include.push(target);
+        } else if target == "wasm32-unknown-emscripten" {
+            include.push(target);
+        } else if target == "wasm32-unknown-unknown" {
+            // Spike only: reuse the unix pregenerated layouts to get to the
+            // next compilation boundary. Correct wasm32-unknown-unknown
+            // layouts still need a dedicated generation path.
+            include.push("unix");
         } else if target.contains("-linux-") || target.ends_with("apple-darwin") {
             // Note that (currently) the x86_64 and aarch64 structures we bind
             // are the exact same for linux/android and MacOS (unsure about iOS, but also don't care)
